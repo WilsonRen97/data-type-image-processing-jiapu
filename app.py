@@ -398,7 +398,8 @@ def receive_image():
         'vertical_lines': vertical_lines,
         'horizontal_lines': horizontal_lines,
         'vertical_data': vertical_data,
-        'horizontal_box_connections': horizontal_box_connections
+        'horizontal_box_connections': horizontal_box_connections,
+        'boxes': boxes
     })
 
 
