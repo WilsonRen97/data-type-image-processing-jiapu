@@ -3,7 +3,6 @@ import io
 import base64
 from flask_cors import CORS
 from flask import Flask, request, jsonify
-import pickle
 from sklearn.cluster import DBSCAN
 import cv2
 import numpy as np
@@ -393,8 +392,14 @@ def receive_image():
               'Text Boxes (MSER)', 'Hough Lines']
     save_combined_image(images, titles, 'cv_env/result.png')
 
-    # Just return a message for now
-    return jsonify({'message': 'Image received!', 'len': len(image_data)})
+    # return vertical_lines, horizontal_lines, vertical_data and horizontal_box_connections
+    return jsonify({
+        'status_code': 200,
+        'vertical_lines': vertical_lines,
+        'horizontal_lines': horizontal_lines,
+        'vertical_data': vertical_data,
+        'horizontal_box_connections': horizontal_box_connections
+    })
 
 
 if __name__ == "__main__":
