@@ -1,8 +1,20 @@
-import matplotlib.pyplot as plt
-import random
-import numpy as np
-import cv2
+from PIL import Image
+import io
+import base64
+from flask_cors import CORS
+from flask import Flask, request, jsonify
+import pickle
 from sklearn.cluster import DBSCAN
+import cv2
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')
+
+
+app = Flask(__name__)
+CORS(app)
 
 
 def line_params(x1, y1, x2, y2):
@@ -204,166 +216,186 @@ def merge_boxes_nearby(boxes, iou_thresh=0.3, distance_thresh=20):
     return merged
 
 
-# ==================== MSER Text Detection ====================
-filename = 'cv_env/hello1.jpeg'
-img_cv = cv2.imread(filename)
-if img_cv is None:
-    raise FileNotFoundError(f"Cannot find the image file: {filename}")
+@app.route('/', methods=['POST'])
+def receive_image():
+    data = request.get_json()
 
-gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-blur = cv2.GaussianBlur(gray, (5, 5), 0)
-blur2 = cv2.bilateralFilter(gray, 9, 75, 75)
-edges = cv2.Canny(blur, 100, 200)
+    if not data or 'image' not in data:
+        return jsonify({'error': 'No image provided'}), 400
 
-# MSER detector
-mser = cv2.MSER_create()
-mser.setDelta(3)        # sensitivity
-mser.setMinArea(500)    # min area of region
-mser.setMaxArea(1300)   # max area of region
-regions, _ = mser.detectRegions(blur2)
-boxes = [cv2.boundingRect(p.reshape(-1, 1, 2)) for p in regions]
+    image_data = data['image']
+    if ',' in image_data:
+        image_data = image_data.split(',')[1]
+    img_bytes = base64.b64decode(image_data)
+    img_pil = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+    img_cv = np.array(img_pil)
+    img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
 
-filtered_boxes = []
-for (x, y, w, h) in boxes:
-    aspect_ratio = w / float(h)
-    if 0.6 < aspect_ratio < 2:  # adjust based on your text
-        filtered_boxes.append((x, y, w, h))
-boxes = filtered_boxes
+    # ==================== MSER Text Detection ====================
+    # filename = 'cv_env/hello1.jpeg'
+    # img_cv = cv2.imread(filename)
+    # if img_cv is None:
+    #     raise FileNotFoundError(f"Cannot find the image file: {filename}")
 
-boxes = merge_boxes_nearby(boxes, iou_thresh=0.3, distance_thresh=150)
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    blur2 = cv2.bilateralFilter(gray, 9, 75, 75)
+    edges = cv2.Canny(blur, 100, 200)
 
-img_text_boxes = img_cv.copy()
-for (x, y, w, h) in boxes:
-    cv2.rectangle(img_text_boxes, (x, y), (x + w, y + h), (0, 255, 0), 2)
-print(f"Detected text boxes (MSER): {len(boxes)}")
+    # MSER detector
+    mser = cv2.MSER_create()
+    mser.setDelta(3)        # sensitivity
+    mser.setMinArea(500)    # min area of region
+    mser.setMaxArea(1300)   # max area of region
+    regions, _ = mser.detectRegions(blur2)
+    boxes = [cv2.boundingRect(p.reshape(-1, 1, 2)) for p in regions]
 
-# ==================== Hough Line Detection ====================
+    filtered_boxes = []
+    for (x, y, w, h) in boxes:
+        aspect_ratio = w / float(h)
+        if 0.6 < aspect_ratio < 2:  # adjust based on your text
+            filtered_boxes.append((x, y, w, h))
+    boxes = filtered_boxes
 
-# use masked edges from text boxes to avoid detecting lines inside text
-# mask = np.ones(edges.shape, dtype="uint8") * 255
-# for (x, y, w, h) in boxes:
-#     cv2.rectangle(mask, (x, y), (x + w, y + h), 0, -1)
-# masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
+    boxes = merge_boxes_nearby(boxes, iou_thresh=0.3, distance_thresh=150)
 
-lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=75,
-                        minLineLength=100, maxLineGap=30)
-img_lines = img_cv.copy()
-merged_lines = []
-# store all vertical lines
-vertical_lines = []
-# store all horizontal lines
-horizontal_lines = []
+    img_text_boxes = img_cv.copy()
+    for (x, y, w, h) in boxes:
+        cv2.rectangle(img_text_boxes, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    print(f"Detected text boxes (MSER): {len(boxes)}")
 
-if lines is not None:
-    print(f"Number of lines: {len(lines)}")
-    merged_lines = merge_lines_aggressive_segments(lines)
-    print("Number of merged line segments:", len(merged_lines))
+    # ==================== Hough Line Detection ====================
 
-    vertical_count = 0
-    horizontal_count = 0
-    other_count = 0
-    tolerance = 30
-    for x1, y1, x2, y2 in merged_lines:
-        if abs(x1 - x2) < tolerance:
-            label = "Vertical" + str(vertical_count)
-            vertical_count += 1
-            vertical_lines.append((x1, y1, x2, y2))
-        elif abs(y1 - y2) < tolerance:
-            label = "Horizontal" + str(horizontal_count)
-            horizontal_count += 1
-            horizontal_lines.append((x1, y1, x2, y2))
-        else:
-            continue  # skip Other lines completely
+    # use masked edges from text boxes to avoid detecting lines inside text
+    # mask = np.ones(edges.shape, dtype="uint8") * 255
+    # for (x, y, w, h) in boxes:
+    #     cv2.rectangle(mask, (x, y), (x + w, y + h), 0, -1)
+    # masked_edges = cv2.bitwise_and(edges, edges, mask=mask)
 
-        # Draw line
-        color = tuple(random.randint(0, 255) for _ in range(3))
-        cv2.line(img_lines, (x1, y1), (x2, y2), color, 5)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=75,
+                            minLineLength=100, maxLineGap=30)
+    img_lines = img_cv.copy()
+    merged_lines = []
+    # store all vertical lines
+    vertical_lines = []
+    # store all horizontal lines
+    horizontal_lines = []
 
-        # Draw label
-        cv2.putText(img_lines, label, ((x1 + x2) // 2, (y1 + y2) // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+    if lines is not None:
+        print(f"Number of lines: {len(lines)}")
+        merged_lines = merge_lines_aggressive_segments(lines)
+        print("Number of merged line segments:", len(merged_lines))
 
-print(f"Vertical lines: {vertical_count}")
-print(f"Horizontal lines: {horizontal_count}")
-print(f"Other lines: {other_count}")
+        vertical_count = 0
+        horizontal_count = 0
+        other_count = 0
+        tolerance = 30
+        for x1, y1, x2, y2 in merged_lines:
+            if abs(x1 - x2) < tolerance:
+                label = "Vertical" + str(vertical_count)
+                vertical_count += 1
+                vertical_lines.append((x1, y1, x2, y2))
+            elif abs(y1 - y2) < tolerance:
+                label = "Horizontal" + str(horizontal_count)
+                horizontal_count += 1
+                horizontal_lines.append((x1, y1, x2, y2))
+            else:
+                continue  # skip Other lines completely
 
-# ==================== Save combined image ====================
+            # Draw line
+            color = tuple(random.randint(0, 255) for _ in range(3))
+            cv2.line(img_lines, (x1, y1), (x2, y2), color, 5)
+
+            # Draw label
+            cv2.putText(img_lines, label, ((x1 + x2) // 2, (y1 + y2) // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+    print(f"Vertical lines: {vertical_count}")
+    print(f"Horizontal lines: {horizontal_count}")
+    print(f"Other lines: {other_count}")
+
+    # ==================== Save combined image ====================
+
+    def save_combined_image(images, titles, save_path='combined.png', dpi=600):
+        n = len(images)
+        plt.figure(figsize=(5 * n, 5), dpi=dpi)
+
+        for i, (img, title) in enumerate(zip(images, titles), 1):
+            plt.subplot(1, n, i)
+            plt.title(title)
+            if len(img.shape) == 2:  # grayscale
+                plt.imshow(img, cmap='gray')
+            else:
+                plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            plt.axis('off')
+
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.close()
+        print(f"Saved combined image to {save_path}")
+
+    # ==================== Analyze Vertical Line Connections ====================
+    vertical_data = {}
+    # for each vertical line, find all the overlapping boxes
+    print('================== Vertical to Box Connections ==================')
+    for i, (x1, y1, x2, y2) in enumerate(vertical_lines):
+        for (bx, by, bw, bh) in boxes:
+            # check if line i is within box x range
+            if bx <= x1 <= bx + bw:
+                if i not in vertical_data:
+                    vertical_data[i] = []
+                vertical_data[i].append((bx, by, bw, bh))
+        # sort boxes by y position
+        if i in vertical_data:
+            vertical_data[i].sort(key=lambda b: b[1])
+        # print the number of boxes connected to this line
+        num_boxes = len(vertical_data.get(i, []))
+        print(f"Vertical line {i} connects to {num_boxes} text boxes.")
+    print(vertical_data)
+
+    # for each horizontal line, find all the overlapping vertical lines
+    print('================== Horizontal to Vertical Connections ==================')
+    horizontal_data = {}
+    tolerance = 20
+    for i, (x1, y1, x2, y2) in enumerate(horizontal_lines):
+        for j, (vx1, vy1, vx2, vy2) in enumerate(vertical_lines):
+            if (min(x1, x2) - tolerance <= vx1 <= max(x1, x2) + tolerance and
+                    min(vy1, vy2) - tolerance <= y1 <= max(vy1, vy2) + tolerance):
+                if i not in horizontal_data:
+                    horizontal_data[i] = []
+                horizontal_data[i].append(j)
+        num_vlines = len(horizontal_data.get(i, []))
+        # print the vertical line indices
+        if i in horizontal_data:
+            print(f"Vertical lines {i} connect to: {horizontal_data[i]}")
+    print(horizontal_data)
+
+    # for each horizontal_data, find the first box connected to the vertical line
+    # and that box has to be below the horizontal line
+    print('================== Horizontal to Box Connections ==================')
+    horizontal_box_connections = {}
+    for hline_idx, vline_indices in horizontal_data.items():
+        hy1 = horizontal_lines[hline_idx][1]
+        connected_boxes = []
+        for vline_idx in vline_indices:
+            boxes_on_vline = vertical_data.get(vline_idx, [])
+            for (bx, by, bw, bh) in boxes_on_vline:
+                if by > hy1:  # box is below horizontal line
+                    connected_boxes.append((bx, by, bw, bh))
+                    break  # only take the first box below the line
+        horizontal_box_connections[hline_idx] = connected_boxes
+        print(
+            f"Horizontal line {hline_idx} first connects to boxes: {connected_boxes}")
+    print(horizontal_box_connections)
+
+    images = [img_cv, gray, blur, edges, img_text_boxes, img_lines]
+    titles = ['Original', 'Gray', 'Blur', 'Canny',
+              'Text Boxes (MSER)', 'Hough Lines']
+    save_combined_image(images, titles, 'cv_env/result.png')
+
+    # Just return a message for now
+    return jsonify({'message': 'Image received!', 'len': len(image_data)})
 
 
-def save_combined_image(images, titles, save_path='combined.png', dpi=600):
-    n = len(images)
-    plt.figure(figsize=(5 * n, 5), dpi=dpi)
-
-    for i, (img, title) in enumerate(zip(images, titles), 1):
-        plt.subplot(1, n, i)
-        plt.title(title)
-        if len(img.shape) == 2:  # grayscale
-            plt.imshow(img, cmap='gray')
-        else:
-            plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        plt.axis('off')
-
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
-    print(f"Saved combined image to {save_path}")
-
-
-# ==================== Analyze Vertical Line Connections ====================
-vertical_data = {}
-# for each vertical line, find all the overlapping boxes
-print('================== Vertical to Box Connections ==================')
-for i, (x1, y1, x2, y2) in enumerate(vertical_lines):
-    for (bx, by, bw, bh) in boxes:
-        # check if line i is within box x range
-        if bx <= x1 <= bx + bw:
-            if i not in vertical_data:
-                vertical_data[i] = []
-            vertical_data[i].append((bx, by, bw, bh))
-    # sort boxes by y position
-    if i in vertical_data:
-        vertical_data[i].sort(key=lambda b: b[1])
-    # print the number of boxes connected to this line
-    num_boxes = len(vertical_data.get(i, []))
-    print(f"Vertical line {i} connects to {num_boxes} text boxes.")
-print(vertical_data)
-
-# for each horizontal line, find all the overlapping vertical lines
-print('================== Horizontal to Vertical Connections ==================')
-horizontal_data = {}
-tolerance = 20
-for i, (x1, y1, x2, y2) in enumerate(horizontal_lines):
-    for j, (vx1, vy1, vx2, vy2) in enumerate(vertical_lines):
-        if (min(x1, x2) - tolerance <= vx1 <= max(x1, x2) + tolerance and
-                min(vy1, vy2) - tolerance <= y1 <= max(vy1, vy2) + tolerance):
-            if i not in horizontal_data:
-                horizontal_data[i] = []
-            horizontal_data[i].append(j)
-    num_vlines = len(horizontal_data.get(i, []))
-    # print the vertical line indices
-    if i in horizontal_data:
-        print(f"Vertical lines {i} connect to: {horizontal_data[i]}")
-print(horizontal_data)
-
-# for each horizontal_data, find the first box connected to the vertical line
-# and that box has to be below the horizontal line
-print('================== Horizontal to Box Connections ==================')
-horizontal_box_connections = {}
-for hline_idx, vline_indices in horizontal_data.items():
-    hy1 = horizontal_lines[hline_idx][1]
-    connected_boxes = []
-    for vline_idx in vline_indices:
-        boxes_on_vline = vertical_data.get(vline_idx, [])
-        for (bx, by, bw, bh) in boxes_on_vline:
-            if by > hy1:  # box is below horizontal line
-                connected_boxes.append((bx, by, bw, bh))
-                break  # only take the first box below the line
-    horizontal_box_connections[hline_idx] = connected_boxes
-    print(
-        f"Horizontal line {hline_idx} first connects to boxes: {connected_boxes}")
-print(horizontal_box_connections)
-
-images = [img_cv, gray, blur, edges, img_text_boxes, img_lines]
-titles = ['Original', 'Gray', 'Blur', 'Canny',
-          'Text Boxes (MSER)', 'Hough Lines']
-save_combined_image(images, titles, 'cv_env/result.png')
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=7500)
