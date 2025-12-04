@@ -43,3 +43,9 @@ from PIL import Image
 from sklearn.cluster import DBSCAN
 
 print("All imports successful!")
+
+
+
+運行專案：
+source cv_env/bin/activate
+python cv_env/app.py
