@@ -317,10 +317,11 @@ def receive_image():
 
     def save_combined_image(images, titles, save_path='combined.png', dpi=600):
         n = len(images)
-        plt.figure(figsize=(5 * n, 5), dpi=dpi)
+        rows, cols = 2, 3
+        plt.figure(figsize=(3 * cols, 8 * rows / cols), dpi=dpi)
 
         for i, (img, title) in enumerate(zip(images, titles), 1):
-            plt.subplot(1, n, i)
+            plt.subplot(rows, cols, i)
             plt.title(title)
             if len(img.shape) == 2:  # grayscale
                 plt.imshow(img, cmap='gray')
